@@ -18,10 +18,10 @@
 
 ## UPDATE 11/8/21
 #### A lot of things have changed in the project recently.
-#### - There are two lineup optimizers, one for Showdown contest, and one for Classic contests
-#### * There is a file (`StatFilling.ipynb`) that scrapes FBRef, Odds Sites, and FiveThirtyEight to compile pre-game data automatically
-#### * The stat predictions (Goals, shots, crosses, etc.) is done in an R markdown file (`R_StatPreds.Rmd`)
-#### * There is a structured backtesting notebook too, to efficiently test new methods or contest structures
+#### &nbsp;&nbsp;&nbsp;&nbsp;- There are two lineup optimizers, one for Showdown contest, and one for Classic contests
+#### &nbsp;&nbsp;&nbsp;&nbsp;- There is a file (`StatFilling.ipynb`) that scrapes FBRef, Odds Sites, and FiveThirtyEight to compile pre-game data automatically
+#### &nbsp;&nbsp;&nbsp;&nbsp;- The stat predictions (Goals, shots, crosses, etc.) is done in an R markdown file (`R_StatPreds.Rmd`)
+#### &nbsp;&nbsp;&nbsp;&nbsp;- There is a structured backtesting notebook too, to efficiently test new methods or contest structures
 
 ### Reccomended Workflow
 #### 1. Compile data using the `StatFilling.ipynb` file
