@@ -15,6 +15,7 @@
 #### This short notebook is a brief exploration into the share of fantasy points scored for each fantasty-point-scoring event in each of the top 5 European leagues, as well as MLS.
 
 
+
 ## UPDATE 11/8/21
 #### A lot of things have changed in the project recently.
 #### -There are two lineup optimizers, one for Showdown contest, and one for Classic contests
