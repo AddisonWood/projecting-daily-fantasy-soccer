@@ -1,0 +1,458 @@
+---
+title: "Untitled"
+author: "Addison Wood"
+date: "8/11/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r functions}
+#M/D/YY to YYYYMMDD
+UniformDate = function(input.date){
+  month = strsplit(input.date, split='/')[[1]][1]
+  day = strsplit(input.date, split='/')[[1]][2]
+  year = strsplit(input.date, split='/')[[1]][3]
+  if (strtoi(month) < 10){ month = paste("0", month, sep='') }
+  if (strtoi(day) < 10){ day = paste("0", day, sep='') }
+  year = paste("20", year, sep='')
+  output.date = paste(year, month, day, sep='')
+  return(output.date)
+}
+```
+
+```{r main}
+league = "MLS"  # MLS, PremierLeague, Bundesliga, Ligue1, LaLiga, SerieA. Big5
+nfolds = 100
+
+start = Sys.time()
+library(tree)
+library(randomForest)
+library(gbm)
+today = as.character(Sys.Date())
+today = as.numeric(paste(substr(today,1,4),substr(today,6,7),substr(today,9,10),sep=''))
+#today = 20211029
+data = read.csv(paste('Shotlogs/', league, '_shotlog2021.csv', sep=''))
+data$Date = as.character(data$Date)
+for (i in 1:dim(data)[1]){
+  if (grepl('/', data$Date[i])){ data$Date[i] = UniformDate(data$Date[i]) }
+}
+
+# Set StatsBomb Stats to a per-game basis
+data$xG = data$xG / data$GamesPlayed
+data$xA = data$xA / data$GamesPlayed
+data$PSxG = data$PSxG / data$GamesPlayed
+#data$PSxG.Sot = data$PSxG.SoT / data$GamesPlayed
+data$Sh = data$Sh / data$GamesPlayed
+data$SoT = data$SoT / data$GamesPlayed
+data$KP = data$KP / data$GamesPlayed
+data$Fls = data$Fls / data$GamesPlayed
+data$Fld = data$Fld / data$GamesPlayed
+data$Crs = data$Crs / data$GamesPlayed
+data$Int = data$Int / data$GamesPlayed
+data$TklW = data$TklW / data$GamesPlayed
+data$xG_A = data$xG_A / data$GamesPlayed
+data$xA_A = data$xA_A / data$GamesPlayed
+data$PSxG_A = data$PSxG_A / data$GamesPlayed
+#$PSxG.Sot_A = data$PSxG.SoT_A / data$GamesPlayed
+data$Sh_A = data$Sh_A / data$GamesPlayed
+data$SoT_A = data$SoT_A / data$GamesPlayed
+data$KP_A = data$KP_A / data$GamesPlayed
+data$Fls_A = data$Fls_A / data$GamesPlayed
+data$Fld_A = data$Fld_A / data$GamesPlayed
+data$Crs_A = data$Crs_A / data$GamesPlayed
+data$Int_A = data$Int_A / data$GamesPlayed
+data$TklW_A = data$TklW_A / data$GamesPlayed
+
+# Create opponent stats for analysis
+relevant.cols = c("Win_Odds", "CS_Odds", "Odds_GF", "Pinn_Odds", "Pinn_CS", "Pinn_Goals", "OddsShark_GF", "FiveThirtyEight_Odds", 'FiveThirtyEight_Goals', 'FiveThirtyEight_SPI', 'FiveThirtyEight_Importance', "GamesPlayed", "xG", "xA", "PSxG", "PSxG.SoT", "Sh", "SoT", "KP", "Fls", "Fld", "Crs", "Int", "TklW", "xG_A", "xA_A", "PSxG_A", "PSxG.SoT_A", "Sh_A", "SoT_A", "KP_A", "Fls_A", "Fld_A", "Crs_A", "Int_A", "TklW_A")
+for (col in relevant.cols){
+  data[, paste('Opp_', col, sep='')] = NA
+}
+
+games = max(data$GameId)
+for (i in 0:games){
+  prematch.data = data[data$GameId == i, ]
+  indices = as.numeric(rownames(data[data$GameId == i, ]))
+  for (col in relevant.cols){
+    colname = paste('Opp_', col, sep='')
+    data[,colname][indices[1]] = data[,col][indices[2]]
+    data[,colname][indices[2]] = data[,col][indices[1]]
+  }
+}
+
+training = data[data$VOID != 'void', ]
+training = training[!is.na(training$Win_Odds), ]
+
+testing = training[is.na(training$Real_Goals), ]
+training = training[!is.na(training$Real_Goals), ]
+
+#P = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1)
+#Ratios = data.frame(matrix(ncol=4, nrow=0))
+#colnames(Ratios) = c('OddsC', 'Five38', 'OddsS', 'error')
+#i=1
+#for (a in P){
+#  for (b in P){
+#    for (c in P){
+#      if ((a + b + c) == 1){
+#        Ratios[i,] = c(a,b,c,0)
+#        i=i+1
+#      }
+#    }
+#  }
+#}
+#Ratios = data.frame(matrix(ncol=3, nrow=101))
+#colnames(Ratios) = c('Five38', 'OddsS', 'error')
+#Ratios$Five38 = 0:100/100
+#Ratios$OddsS = 100:0/100
+
+#Ratios
+#for (i in 1:dim(Ratios)[1]){
+  # Use for leagues with Goal Odds
+  #training$GoalsCombo = training$Odds_GF*Ratios$OddsC[i] + training$FiveThirtyEight_Goals*Ratios$Five38[i] + training$OddsShark_GF*Ratios$OddsS[i]
+  # Use of leagues without Goal Odds
+  #training$GoalsCombo = training$FiveThirtyEight_Goals*Ratios$Five38[i] + training$OddsShark_GF*Ratios$OddsS[i]
+  #model = lm(Real_Goals ~ GoalsCombo, data=training)
+  #Ratios$error[i] = sqrt(mean((predict(model, training) - training$Real_Goals)^2))
+  #Ratios$error[i] = sqrt(mean((training$GoalsCombo - training$Real_Goals)^2))
+#}
+#Ratios
+#min.i = which.min(Ratios$error)
+#Ratios[min.i,]
+
+#training$GoalsCombo = training$FiveThirtyEight_Goals*Ratios$Five38[min.i] + training$OddsShark_GF*Ratios$OddsS[min.i]
+training$GoalsCombo = training$FiveThirtyEight_Goals
+model = lm(Real_Goals ~ GoalsCombo, data=training)
+preds = predict(model, training)
+plot(training$Real_Goals, preds)
+
+#testing$GoalsCombo = testing$FiveThirtyEight_Goals*Ratios$Five38[min.i] + testing$OddsShark_GF*Ratios$OddsS[min.i]
+testing$GoalsCombo = testing$FiveThirtyEight_Goals
+new.preds = predict(model, testing)
+length(new.preds)
+length(testing)
+Predictions = data.frame(matrix(ncol=3, nrow=length(new.preds)))
+colnames(Predictions) = c('Team', 'Opp', 'Pred.Goals')
+Predictions$Team = testing$Team
+Predictions$Opp = testing$Opp
+Predictions$Pred.Goals = new.preds
+Predictions
+
+training$Win = 0
+training$CS = 0
+
+row.names(training) = NULL #reset indices in training dataset
+
+# Get win and CS bools in columns
+for (id in unique(training$GameId)){
+  homeidx = as.numeric(rownames(training[training$GameId == id, ]))[1] #Home team
+  awayidx = as.numeric(rownames(training[training$GameId == id, ]))[2] #Away team
+  
+  if (training$Real_Goals[homeidx] > training$Real_Goals[awayidx]){ training$Win[homeidx] = 1 }
+  else if (training$Real_Goals[homeidx] > training$Real_Goals[awayidx]){ training$Win[awayidx] = 1 }
+  else if (training$Real_Goals[homeidx] == training$Real_Goals[awayidx]){
+    training$Win[homeidx] = 0.5
+    training$Win[awayidx] = 0.5
+  }
+  
+  # Add half of draw odds to each team's win odds to make logloss easier
+  # OddsChecker Odds
+  drawodds = 100 - (training$Win_Odds[homeidx] + training$Win_Odds[awayidx])
+  training$Win_Odds[homeidx] = training$Win_Odds[homeidx] + (drawodds/2)
+  training$Win_Odds[awayidx] = training$Win_Odds[awayidx] + (drawodds/2)
+  # FiveThirtyEight Odds
+  drawodds = 100 - (training$FiveThirtyEight_Odds[homeidx] + training$FiveThirtyEight_Odds[awayidx])
+  training$FiveThirtyEight_Odds[homeidx] = training$FiveThirtyEight_Odds[homeidx] + (drawodds/2)
+  training$FiveThirtyEight_Odds[awayidx] = training$FiveThirtyEight_Odds[awayidx] + (drawodds/2)
+  
+  
+  
+  if (training$Real_Goals[awayidx] == 0){ training$CS[homeidx] = 1 }
+  if (training$Real_Goals[homeidx] == 0){ training$CS[awayidx] = 1 }
+}
+
+# Add draw odds to win odds in testing data to stay consistent
+row.names(testing) = NULL #reset indices in training dataset
+for (id in unique(testing$GameId)){ 
+  homeidx = as.numeric(rownames(testing[testing$GameId == id, ]))[1] #Home team
+  awayidx = as.numeric(rownames(testing[testing$GameId == id, ]))[2] #Away team
+  # OddsChecker Odds
+  drawodds = 100 - (testing$Win_Odds[homeidx] + testing$Win_Odds[awayidx])
+  testing$Win_Odds[homeidx] = testing$Win_Odds[homeidx] + (drawodds/2)
+  testing$Win_Odds[awayidx] = testing$Win_Odds[awayidx] + (drawodds/2)
+  # FiveThirtyEight Odds
+  drawodds = 100 - (testing$FiveThirtyEight_Odds[homeidx] + testing$FiveThirtyEight_Odds[awayidx])
+  testing$FiveThirtyEight_Odds[homeidx] = testing$FiveThirtyEight_Odds[homeidx] + (drawodds/2)
+  testing$FiveThirtyEight_Odds[awayidx] = testing$FiveThirtyEight_Odds[awayidx] + (drawodds/2)
+}
+
+# Calculate log-loss for OddsChecker, Pinnacle, and FiveThirtyEight Odds
+OddsC.logloss = mean(-1*log(1-abs(training$Win - (training$Win_Odds/100))))
+Five38.logloss = mean(-1*log(1-abs(training$Win - (training$FiveThirtyEight_Odds/100))))
+
+c(OddsC.logloss, Five38.logloss)
+
+#P = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1)
+Win.Ratios = data.frame(matrix(ncol=3, nrow=101))
+colnames(Win.Ratios) = c('OddsC', 'Five38', 'logloss')
+Win.Ratios$OddsC = 0:100/100
+Win.Ratios$Five38 = 100:0/100
+Win.Ratios
+for (i in 1:dim(Win.Ratios)[1]){
+  training$WinCombo = training$Win_Odds*Win.Ratios$OddsC[i] + training$FiveThirtyEight_Odds*Win.Ratios$Five38[i]
+  model = glm(Win ~ WinCombo, data=training)
+  preds = predict(model, data=training)
+  Win.Ratios$logloss[i] = mean(-1*log(1-abs(training$Win - preds)))
+}
+Win.Ratios
+win.min.i = which.min(Win.Ratios$logloss)
+Win.Ratios[win.min.i, ]
+final.win.ratios = c(Win.Ratios$OddsC[win.min.i], Win.Ratios$Five38[win.min.i])
+training$WinCombo = training$Win_Odds*final.win.ratios[1] + training$FiveThirtyEight_Odds*final.win.ratios[2]
+testing$WinCombo = testing$Win_Odds*final.win.ratios[1] + testing$FiveThirtyEight_Odds*final.win.ratios[2]
+
+# A remnant of having pinnacle odds, the combo doesn't mean anything anymore
+#training$CSCombo = training$CS_Odds
+#testing$CSCombo = testing$CS_Odds
+
+# Get Differences for non-odds stats
+statnames = c('xG', 'xA', 'PSxG', 'PSxG.SoT', 'Sh', 'SoT', 'KP', 'Fls', 'Fld', 'Crs', 'Int', 'TklW')
+for (stat in statnames){
+  training[,paste(stat,'_Diff',sep='')]=NA
+  testing[,paste(stat,'_Diff',sep='')]=NA
+}
+
+for (id in unique(training$GameId)){
+  homeidx = as.numeric(rownames(training[training$GameId == id, ]))[1] #Home team
+  awayidx = as.numeric(rownames(training[training$GameId == id, ]))[2] #Away team
+  for (stat in statnames){
+    stat_a = paste(stat,'_A',sep='')
+    stat_diff = paste(stat,'_Diff',sep='')
+    training[homeidx,stat_diff] = training[homeidx,stat] + training[awayidx,stat_a]
+    training[awayidx,stat_diff] = training[awayidx,stat] + training[homeidx,stat_a]
+  }
+  training[homeidx,'FiveThirtyEight_SPI_Diff'] = training[homeidx,'FiveThirtyEight_SPI'] - training[awayidx,'FiveThirtyEight_SPI']
+  training[awayidx,'FiveThirtyEight_SPI_Diff'] = training[awayidx,'FiveThirtyEight_SPI'] - training[homeidx,'FiveThirtyEight_SPI']
+  training[homeidx,'FiveThirtyEight_Importance_Diff'] = training[homeidx,'FiveThirtyEight_Importance'] - training[awayidx,'FiveThirtyEight_Importance']
+  training[awayidx,'FiveThirtyEight_Importance_Diff'] = training[awayidx,'FiveThirtyEight_Importance'] - training[homeidx,'FiveThirtyEight_Importance']
+  
+}
+
+for (id in unique(testing$GameId)){ 
+  homeidx = as.numeric(rownames(testing[testing$GameId == id, ]))[1] #Home team
+  awayidx = as.numeric(rownames(testing[testing$GameId == id, ]))[2] #Away team
+  for (stat in statnames){
+    stat_a = paste(stat,'_A',sep='')
+    stat_diff = paste(stat,'_Diff',sep='')
+    testing[homeidx,stat_diff] = testing[homeidx,stat] + testing[awayidx,stat_a]
+    testing[awayidx,stat_diff] = testing[awayidx,stat] + testing[homeidx,stat_a]
+  }
+  testing[homeidx,'FiveThirtyEight_SPI_Diff'] = testing[homeidx,'FiveThirtyEight_SPI'] - testing[awayidx,'FiveThirtyEight_SPI']
+  testing[awayidx,'FiveThirtyEight_SPI_Diff'] = testing[awayidx,'FiveThirtyEight_SPI'] - testing[homeidx,'FiveThirtyEight_SPI']
+  testing[homeidx,'FiveThirtyEight_Importance_Diff'] = testing[homeidx,'FiveThirtyEight_Importance'] - testing[awayidx,'FiveThirtyEight_Importance']
+  testing[awayidx,'FiveThirtyEight_Importance_Diff'] = testing[awayidx,'FiveThirtyEight_Importance'] - testing[homeidx,'FiveThirtyEight_Importance']
+}
+
+#target.stats = c('Real_Goals')
+target.stats = c('Real_Goals', 'Real_Sh', 'Real_SoT', 'Real_KP', 'Real_Fls', 'Real_Fld', 'Real_Crs', 'Real_Int', 'Real_TklW')
+Predictions = data.frame(matrix(ncol=13, nrow=length(new.preds)))
+colnames(Predictions) = c('Date', 'Team', 'Opp', 'League', 'Pred.Goals', 'Pred.Sh', 'Pred.SoT', 'Pred.KP', 'Pred.Fls', 'Pred.Fld', 'Pred.Crs', 'Pred.Int', 'Pred.TklW')
+Predictions$Date = testing$Date
+Predictions$Team = testing$Team
+Predictions$Opp = testing$Opp
+RMSEs = data.frame(matrix(ncol=11, nrow=9))
+colnames(RMSEs) = c('Stat', 'Start_Date', 'End_Date', 'Linear_Ratio', 'Tree_Ratio', 'Bagging_Ratio', 'RandomForest_Ratio', 'Boosting_Ratio', 'Min_RMSE', "N", "n_folds")
+rmse.idx = 1
+for (target.stat in target.stats){
+  print(target.stat)
+  #form = paste(target.stat,"~HorA+WinCombo+CSCombo+GoalsCombo+FiveThirtyEight_SPI_Diff+FiveThirtyEight_Importance_Diff+xG_Diff+xA_Diff+PSxG_Diff+PSxG.SoT_Diff+Sh_Diff+SoT_Diff+KP_Diff+Fls_Diff+Fld_Diff+Crs_Diff+Int_Diff+TklW_Diff", sep="")
+  #form = paste(target.stat,"~HorA+WinCombo+CSCombo+FiveThirtyEight_Goals+FiveThirtyEight_SPI_Diff+FiveThirtyEight_Importance_Diff+xG_Diff+xA_Diff+PSxG_Diff+PSxG.SoT_Diff+Sh_Diff+SoT_Diff+KP_Diff+Fls_Diff+Fld_Diff+Crs_Diff+Int_Diff+TklW_Diff", sep="")
+  form = paste(target.stat,"~HorA+WinCombo+FiveThirtyEight_Goals+FiveThirtyEight_SPI_Diff+FiveThirtyEight_Importance_Diff+xG_Diff+xA_Diff+PSxG_Diff+PSxG.SoT_Diff+Sh_Diff+SoT_Diff+KP_Diff+Fls_Diff+Fld_Diff+Crs_Diff+Int_Diff+TklW_Diff", sep="")
+  mty=17
+  form = eval(parse(text=form))
+  RMSEs$Stat[rmse.idx] = target.stat
+  
+  N = dim(training)[1]
+  P = c(0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1)
+  Ratios = data.frame(matrix(ncol=6, nrow=0))
+  colnames(Ratios) = c('Linear', 'Tree', 'Bagging', 'Random.Forest', 'Boosting', 'RMSE')
+  i=1
+  for (a in P){
+    for (b in P){
+      for (c in P){
+        for (d in P){
+          for (e in P){
+            if ((a + b + c + d + e) == 1){
+              Ratios[i,] = c(a,b,c,d,e,0)
+              i=i+1
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  Ratios
+  CV.RMSES = data.frame(matrix(ncol=nfolds, nrow=dim(Ratios)[1]))
+  
+  for (fold in 1:nfolds){
+    test.size = min(max(round((dim(training)[1] / nfolds)*2), round(dim(training)[1]*.03)), dim(training)[1])
+    #test.size = min(max(round((dim(training)[1] / nfolds)*2), 4), dim(training)[1])
+    idx.sample = sample(1:N)
+    tmp.train = training[idx.sample[(test.size+1):N],]
+    tmp.test = training[idx.sample[1:test.size],]
+    row.names(tmp.train) = NULL
+    row.names(tmp.test) = NULL
+    
+    training.combos = tmp.test[, c('Team', 'Opp', target.stat)]
+    
+    # Simple Linear Model
+    #print('lm')
+    model = lm(form, data=tmp.train)
+    training.combos$Linear.Preds = predict(model, tmp.test)
+    
+    # Tree Regression
+    #print('tree')
+    model = tree(form, data=tmp.train, control=tree.control(1866496, mincut = 1000))
+    training.combos$Tree.Preds = predict(model, tmp.test)
+    
+    # Bagging
+    #print('bagging')
+    model = randomForest(form, data=tmp.train, ntree=1000, mtry=mty, importance=T, na.action=na.exclude)
+    training.combos$Bag.Preds = predict(model, tmp.test)
+    
+    # Random Forest
+    #print('rf')
+    model = randomForest(form, data=tmp.train, ntree=1000, mtry=4, importance=T, na.action=na.exclude)
+    training.combos$RF.Preds = predict(model, tmp.test)
+    
+    # Boosting
+    #print('boosting')
+    model = gbm(form, data=tmp.train, distribution='gaussian', shrinkage=0.01, n.tree=1000, interaction.depth=4)
+    training.combos$Boost.Preds = predict(model, tmp.test, n.trees=1000)
+    
+    cname = paste('X', fold, sep="")
+    for (i in 1:dim(Ratios)[1]){
+      training.combos$Combo.Preds = training.combos$Linear.Preds * Ratios$Linear[i] +
+        training.combos$Tree.Preds * Ratios$Tree[i] + 
+        training.combos$Bag.Preds * Ratios$Bagging[i] + 
+        training.combos$RF.Preds * Ratios$Random.Forest[i] + 
+        training.combos$Boost.Preds * Ratios$Boosting[i]
+      
+      CV.RMSES[i,cname] = sqrt(mean((training.combos$Combo.Preds - training.combos[,target.stat])^2))
+    }
+  }
+  Ratios$RMSE = rowMeans(CV.RMSES)
+  
+  min.idx = which.min(Ratios$RMSE)
+  Ratios[min.idx,]
+  RMSEs$Linear_Ratio[rmse.idx] = Ratios$Linear[min.idx]
+  RMSEs$Tree_Ratio[rmse.idx] = Ratios$Tree[min.idx]
+  RMSEs$Bagging_Ratio[rmse.idx] = Ratios$Bagging[min.idx]
+  RMSEs$RandomForest_Ratio[rmse.idx] = Ratios$Random.Forest[min.idx]
+  RMSEs$Boosting_Ratio[rmse.idx] = Ratios$Boosting[min.idx]
+  RMSEs$Min_RMSE[rmse.idx] = Ratios$RMSE[min.idx]
+  RMSEs$Start_Date[rmse.idx] = as.character(testing$Date[1])
+  RMSEs$End_Date[rmse.idx] = as.character(testing$Date[dim(testing)[1]])
+  RMSEs$N[rmse.idx] = test.size
+  RMSEs$n_folds[rmse.idx] = nfolds
+  
+  testing.combos = testing[, c('Team', 'Opp', target.stat)]
+  # Simple Linear Model
+  model = lm(form, data=training)
+  testing.combos$Linear.Preds = predict(model, testing)
+  # Tree Regression
+  model = tree(form, data=training, control=tree.control(1866496, mincut = 1000))
+  testing.combos$Tree.Preds = predict(model, testing)
+  # Bagging
+  model = randomForest(form, data=training, ntree=1000, mtry=mty, importance=T, na.action=na.exclude)
+  testing.combos$Bag.Preds = predict(model, testing)
+  # Random Forest
+  model = randomForest(form, data=training, ntree=1000, mtry=4, importance=T, na.action=na.exclude)
+  testing.combos$RF.Preds = predict(model, testing)
+  # Boosting
+  model = gbm(form, data=training, distribution='gaussian', shrinkage=0.01, n.tree=1000, interaction.depth=4)
+  testing.combos$Boost.Preds = predict(model, testing, n.trees=1000)
+  
+  testing.combos$Combo.Preds = testing.combos$Linear.Preds * Ratios$Linear[min.idx] +
+        testing.combos$Tree.Preds * Ratios$Tree[min.idx] + 
+        testing.combos$Bag.Preds * Ratios$Bagging[min.idx] + 
+        testing.combos$RF.Preds * Ratios$Random.Forest[min.idx] + 
+        testing.combos$Boost.Preds * Ratios$Boosting[min.idx]
+  Predictions[, paste('Pred.', substr(target.stat, 6, nchar(target.stat)), sep='')] = testing.combos$Combo.Preds
+  rmse.idx=rmse.idx+1
+  if (target.stat == 'Real_Goals'){
+    #print('debug')
+    goals.Ratios = data.frame(Ratios)
+    goals.CV.RMSES = data.frame(CV.RMSES)
+  }
+}
+if (league == 'Big5'){ Predictions$League = testing$League
+} else {
+  Predictions$League = league }
+Predictions = Predictions[Predictions$Date >= today, ]
+row.names(Predictions) = NULL
+RMSEs$Start_Date = Predictions$Date[1]
+
+start.date = RMSEs$Start_Date[1]
+end.date = RMSEs$End_Date[1]
+Predictions
+RMSEs
+preds.filename = paste('Regression_Matrices/', league, '/', league, "_predictions_matrix_", start.date, "-", end.date, ".csv", sep='')
+rmse.filename = paste('Regression_Matrices/', league, '/', league, "_rmse_matrix_", start.date, "-", end.date, ".csv", sep='')
+write.csv(Predictions, preds.filename, row.names=F)
+write.csv(RMSEs, rmse.filename, row.names=F)
+```
+
+```{r timing}
+stop = Sys.time()
+stop-start
+```
+
+```{r scratch}
+running.mean = numeric(length = nfolds-1)
+for ( i in 1:(nfolds-1) ){
+  running.mean[i] = rowMeans(goals.CV.RMSES[,1:(i+1)])[min.idx]
+}
+running.mean2 = numeric(length = nfolds-1)
+for ( i in 1:(nfolds-1) ){
+  running.mean2[i] = rowMeans(goals.CV.RMSES[,1:(i+1)])[5]
+}
+{plot(2:nfolds, running.mean, type='l', col='red')
+lines(2:nfolds, running.mean2, col='blue')}
+```
+
+```{r plot2}
+min.idxs = numeric(length=nfolds-1)
+for ( i in 1:(nfolds-1) ){
+  min.idxs[i] = which.min(rowMeans(goals.CV.RMSES[,1:(i+1)]))
+}
+plot(2:nfolds, min.idxs)
+```
+
+```{r plot3}
+linear.ratios = numeric(length=nfolds-1)
+tree.ratios= numeric(length=nfolds-1)
+bagging.ratios = numeric(length=nfolds-1)
+rf.ratios = numeric(length=nfolds-1)
+boosting.ratios = numeric(length=nfolds-1)
+for ( i in 1:(nfolds-1) ){
+  min.idx = which.min(rowMeans(goals.CV.RMSES[,1:(i+1)]))
+  linear.ratios[i] = goals.Ratios$Linear[min.idx]
+  tree.ratios[i] = goals.Ratios$Tree[min.idx]
+  bagging.ratios[i] = goals.Ratios$Bagging[min.idx]
+  rf.ratios[i] = goals.Ratios$Random.Forest[min.idx]
+  boosting.ratios[i] = goals.Ratios$Boosting[min.idx]
+}
+{plot(2:nfolds, linear.ratios, type='l', col='black', ylim=c(0, 1))
+lines(2:nfolds, tree.ratios, col='green')
+lines(2:nfolds, bagging.ratios, col='blue')
+lines(2:nfolds, rf.ratios, col='orange')
+lines(2:nfolds, boosting.ratios, col='red')
+legend(85, 1, legend=c("Linear", "Tree", "Bagging", "RF", "Boosting"),
+       col=c("black", "green", "blue", "orange", "red"), lty=1, cex=.75)}
+```
+
+
